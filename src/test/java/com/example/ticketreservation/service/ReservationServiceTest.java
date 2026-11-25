@@ -97,10 +97,11 @@ class ReservationServiceTest {
 		when(reservationRepository.save(any(Reservation.class)))
 				.thenThrow(new IllegalStateException("save failed"));
 
-		assertThrows(
+		IllegalStateException exception = assertThrows(
 				IllegalStateException.class,
 				() -> service.createReservation(new ReservationRequest("event-1", 2), "customer"));
 
+		assertEquals("save failed", exception.getMessage());
 		verify(eventService).releaseSeatsAtomically("event-1", 2);
 	}
 }

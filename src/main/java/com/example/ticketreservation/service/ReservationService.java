@@ -100,7 +100,7 @@ public class ReservationService {
 			}
 
 			List<String> eventIds = eventRepository.findByOrganizerUsername(currentUsername).stream()
-					.map(Event::getId)
+					.map(event -> event.getId())
 					.toList();
 			reservations = eventIds.isEmpty()
 					? List.of()
@@ -163,7 +163,7 @@ public class ReservationService {
 
 	private ReservationResponse toReservationResponse(Reservation reservation) {
 		String eventName = eventRepository.findById(reservation.getEventId())
-				.map(Event::getName)
+				.map(event -> event.getName())
 				.orElse("Event no longer available");
 		return new ReservationResponse(
 				reservation.getId(),
