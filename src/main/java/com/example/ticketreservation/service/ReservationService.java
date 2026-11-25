@@ -7,6 +7,13 @@ import java.util.concurrent.ThreadLocalRandom;
 
 import org.springframework.stereotype.Service;
 
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
+
 import com.example.ticketreservation.dto.ReservationRequest;
 import com.example.ticketreservation.dto.ReservationResponse;
 import com.example.ticketreservation.exception.ApiException;
@@ -28,16 +35,19 @@ public class ReservationService {
 	private final EventRepository eventRepository;
 	private final ReservationRepository reservationRepository;
 	private final EventService eventService;
+	private final MongoTemplate mongoTemplate;
 
 	public ReservationService(
 			UserRepository userRepository,
 			EventRepository eventRepository,
 			ReservationRepository reservationRepository,
-			EventService eventService) {
+			EventService eventService,
+			MongoTemplate mongoTemplate) {
 		this.userRepository = userRepository;
 		this.eventRepository = eventRepository;
 		this.reservationRepository = reservationRepository;
 		this.eventService = eventService;
+		this.mongoTemplate = mongoTemplate;
 	}
 
 	public ReservationResponse createReservation(
@@ -45,8 +55,8 @@ public class ReservationService {
 			String customerUsername) {
 		AppUser customer = userRepository.findByUsername(customerUsername)
 				.orElseThrow(() -> ApiException.notFound("Customer not found"));
-		Event event = eventService.reserveSeatsAtomically(request.eventId(), request.seats());
 		String reservationCode = generateUniqueReservationCode();
+		Event event = eventService.reserveSeatsAtomically(request.eventId(), request.seats());
 
 		Reservation reservation = Reservation.builder()
 				.reservationCode(reservationCode)
@@ -58,7 +68,17 @@ public class ReservationService {
 				.status(ReservationStatus.CONFIRMED)
 				.createdAt(LocalDateTime.now())
 				.build();
-		return toReservationResponse(reservationRepository.save(reservation));
+		Reservation savedReservation;
+		try {
+			savedReservation = reservationRepository.save(reservation);
+		} catch (DuplicateKeyException saveFailure) {
+			releaseSeatsAfterFailedSave(event.getId(), request.seats(), saveFailure);
+			throw ApiException.conflict("Reservation code collision; please retry");
+		} catch (RuntimeException saveFailure) {
+			releaseSeatsAfterFailedSave(event.getId(), request.seats(), saveFailure);
+			throw saveFailure;
+		}
+		return toReservationResponse(savedReservation);
 	}
 
 	public List<ReservationResponse> getMyReservations(String customerUsername) {
@@ -102,11 +122,22 @@ public class ReservationService {
 			throw ApiException.conflict("Reservation is already cancelled");
 		}
 
-		reservation.setStatus(ReservationStatus.CANCELLED);
-		Reservation cancelledReservation = reservationRepository.save(reservation);
+		Query query = Query.query(Criteria.where("_id").is(reservationId)
+				.and("status").is(ReservationStatus.CONFIRMED));
+		Reservation cancelledReservation = mongoTemplate.findAndModify(
+				query,
+				new Update().set("status", ReservationStatus.CANCELLED),
+				FindAndModifyOptions.options().returnNew(true),
+				Reservation.class);
+		if (cancelledReservation == null) {
+			if (!reservationRepository.existsById(reservationId)) {
+				throw ApiException.notFound("Reservation not found");
+			}
+			throw ApiException.conflict("Reservation is no longer confirmed");
+		}
 		eventService.releaseSeatsAtomically(
-				reservation.getEventId(),
-				reservation.getSeats());
+				cancelledReservation.getEventId(),
+				cancelledReservation.getSeats());
 		return toReservationResponse(cancelledReservation);
 	}
 
@@ -120,6 +151,14 @@ public class ReservationService {
 			}
 		}
 		throw ApiException.conflict("Unable to generate a unique reservation code");
+	}
+
+	private void releaseSeatsAfterFailedSave(String eventId, int seats, RuntimeException failure) {
+		try {
+			eventService.releaseSeatsAtomically(eventId, seats);
+		} catch (RuntimeException releaseFailure) {
+			failure.addSuppressed(releaseFailure);
+		}
 	}
 
 	private ReservationResponse toReservationResponse(Reservation reservation) {

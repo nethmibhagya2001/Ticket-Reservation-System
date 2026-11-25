@@ -85,15 +85,32 @@ public class EventService {
 			throw ApiException.conflict("Total seats cannot be less than seats already reserved");
 		}
 
-		event.setName(request.name());
-		event.setDescription(request.description());
-		event.setVenue(request.venue());
-		event.setEventDate(request.eventDate());
-		event.setTicketPrice(request.ticketPrice());
-		event.setTotalSeats(request.totalSeats());
-		event.setAvailableSeats(request.totalSeats() - soldSeats);
-
-		return toEventResponse(eventRepository.save(event));
+		Query query = Query.query(Criteria.where("_id").is(id)
+				.and("totalSeats").is(event.getTotalSeats())
+				.and("availableSeats").is(event.getAvailableSeats()));
+		if (!isAdmin) {
+			query.addCriteria(Criteria.where("organizerUsername").is(currentUsername));
+		}
+		Update update = new Update()
+				.set("name", request.name())
+				.set("description", request.description())
+				.set("venue", request.venue())
+				.set("eventDate", request.eventDate())
+				.set("ticketPrice", request.ticketPrice())
+				.set("totalSeats", request.totalSeats())
+				.set("availableSeats", request.totalSeats() - soldSeats);
+		Event updatedEvent = mongoTemplate.findAndModify(
+				query,
+				update,
+				FindAndModifyOptions.options().returnNew(true),
+				Event.class);
+		if (updatedEvent == null) {
+			if (!eventRepository.existsById(id)) {
+				throw ApiException.notFound("Event not found");
+			}
+			throw ApiException.conflict("Event changed while it was being updated; retry the request");
+		}
+		return toEventResponse(updatedEvent);
 	}
 
 	public void deleteEvent(String id) {
@@ -101,7 +118,17 @@ public class EventService {
 		if (reservationRepository.existsByEventIdAndStatus(id, ReservationStatus.CONFIRMED)) {
 			throw ApiException.conflict("Cannot delete an event with confirmed reservations");
 		}
-		eventRepository.delete(event);
+
+		Query query = Query.query(Criteria.where("_id").is(id)
+				.and("totalSeats").is(event.getTotalSeats())
+				.and("availableSeats").is(event.getTotalSeats()));
+		Event deletedEvent = mongoTemplate.findAndRemove(query, Event.class);
+		if (deletedEvent == null) {
+			if (!eventRepository.existsById(id)) {
+				throw ApiException.notFound("Event not found");
+			}
+			throw ApiException.conflict("Event changed or still has reserved seats");
+		}
 	}
 
 	public Event reserveSeatsAtomically(String eventId, int seats) {

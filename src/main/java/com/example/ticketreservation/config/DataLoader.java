@@ -3,6 +3,7 @@ package com.example.ticketreservation.config;
 import java.time.LocalDateTime;
 
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.env.Environment;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
@@ -14,6 +15,7 @@ import com.example.ticketreservation.repository.EventRepository;
 import com.example.ticketreservation.repository.UserRepository;
 
 @Component
+@ConditionalOnProperty(name = "app.seed.enabled", havingValue = "true", matchIfMissing = true)
 public class DataLoader implements CommandLineRunner {
 
 	private final UserRepository userRepository;

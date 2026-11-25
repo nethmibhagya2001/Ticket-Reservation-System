@@ -2,6 +2,7 @@ package com.example.ticketreservation.service;
 
 import java.util.List;
 
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -55,7 +56,12 @@ public class AuthService {
 				.fullName(request.fullName())
 				.role(role)
 				.build();
-		AppUser savedUser = userRepository.save(user);
+		AppUser savedUser;
+		try {
+			savedUser = userRepository.save(user);
+		} catch (DuplicateKeyException exception) {
+			throw ApiException.conflict("Username already exists");
+		}
 		return createAuthResponse(savedUser);
 	}
 
